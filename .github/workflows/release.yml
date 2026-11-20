@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Resolve version
+        id: meta
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          $ver = $tag.TrimStart("v")
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            $candidate = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+            if (-not (Test-Path $candidate)) {
+              choco install innosetup -y --no-progress
+            }
+            $isccPath = $candidate
+          } else {
+            $isccPath = $iscc.Source
+          }
+          & $isccPath "/DMyAppVersion=${{ steps.meta.outputs.version }}" "installer\volevel.iss"
+          Copy-Item "target\release\volevel.exe" "installer\Output\volevel-portable-v${{ steps.meta.outputs.version }}.exe"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Volevel ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            installer/Output/Volevel-Setup-v${{ steps.meta.outputs.version }}.exe
+            installer/Output/volevel-portable-v${{ steps.meta.outputs.version }}.exe
